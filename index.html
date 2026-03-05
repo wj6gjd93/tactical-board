@@ -299,6 +299,10 @@ let courtType = 'half';
 // Current transform (computed before each draw call)
 let T = { scale: 1, ox: 0, oy: 0 };
 
+function isPortraitFull() {
+  return courtType === 'full' && (wrap.clientWidth || 1) < (wrap.clientHeight || 1);
+}
+
 function resize() {
   const dpr = window.devicePixelRatio || 1;
   const W   = wrap.clientWidth;
@@ -323,6 +327,13 @@ function computeTransform() {
   const W   = canvas.clientWidth  || canvas.width;
   const H   = canvas.clientHeight || canvas.height;
   const pad = 20;
+  if (isPortraitFull()) {
+    // Long axis (94ft) runs along H, short axis (50ft) along W.
+    // px(x) → maps to screen-y after the reflection transform; py(y) → screen-x.
+    const scale = Math.min((W - pad * 2) / 50, (H - pad * 2) / 94);
+    T = { scale, ox: (H - 94 * scale) / 2, oy: (W - 50 * scale) / 2 };
+    return;
+  }
   const [fw, fh] = courtType === 'half' ? [50, 47] : [94, 50];
   const scale = Math.min((W - pad * 2) / fw, (H - pad * 2) / fh);
   T = { scale, ox: (W - fw * scale) / 2, oy: (H - fh * scale) / 2 };
@@ -412,6 +423,14 @@ function clientToCanvas(clientX, clientY) {
   return { x: clientX - r.left, y: clientY - r.top };
 }
 
+// In portrait-full mode the canvas uses a (x,y)↔(y,x) reflection transform,
+// so pointer screen coords must be swapped to match the drawing storage space.
+function clientToStorage(clientX, clientY) {
+  const pos = clientToCanvas(clientX, clientY);
+  if (isPortraitFull()) return { x: pos.y, y: pos.x };
+  return pos;
+}
+
 function isOverCanvas(clientX, clientY) {
   const r = canvas.getBoundingClientRect();
   return clientX >= r.left && clientX <= r.right
@@ -467,13 +486,13 @@ function hideGhost() {
 function startNewPlayerDrag(team, clientX, clientY) {
   if (players.filter(p => p.team === team).length >= 5) return; // max 5
   const num = nextNum(team);
-  const pos = clientToCanvas(clientX, clientY);
+  const pos = clientToStorage(clientX, clientY);
   drag = { type: 'new', kind: 'player', team, num, cx: pos.x, cy: pos.y, onTrash: false };
   showGhostPlayer(team, num, clientX, clientY);
 }
 
 function startMovePlayerDrag(idx, clientX, clientY) {
-  const pos = clientToCanvas(clientX, clientY);
+  const pos = clientToStorage(clientX, clientY);
   const p   = players[idx];
   drag = { type: 'move', kind: 'player', idx, team: p.team, num: p.num, cx: pos.x, cy: pos.y, onTrash: false };
   showGhostPlayer(p.team, p.num, clientX, clientY);
@@ -481,13 +500,13 @@ function startMovePlayerDrag(idx, clientX, clientY) {
 }
 
 function startNewBallDrag(clientX, clientY) {
-  const pos = clientToCanvas(clientX, clientY);
+  const pos = clientToStorage(clientX, clientY);
   drag = { type: 'new', kind: 'ball', cx: pos.x, cy: pos.y, onTrash: false };
   showGhostBall(clientX, clientY);
 }
 
 function startMoveBallDrag(clientX, clientY) {
-  const pos = clientToCanvas(clientX, clientY);
+  const pos = clientToStorage(clientX, clientY);
   drag = { type: 'move', kind: 'ball', cx: pos.x, cy: pos.y, onTrash: false };
   showGhostBall(clientX, clientY);
   redraw();
@@ -511,7 +530,7 @@ document.getElementById('tok-ball').addEventListener('pointerdown', e => {
 
 canvas.addEventListener('pointerdown', e => {
   e.preventDefault();
-  const pos = clientToCanvas(e.clientX, e.clientY);
+  const pos = clientToStorage(e.clientX, e.clientY);
   // Ball takes priority (smaller, easier to miss)
   if (hitBall(pos.x, pos.y)) { startMoveBallDrag(e.clientX, e.clientY); return; }
   const idx = hitPlayer(pos.x, pos.y);
@@ -521,7 +540,7 @@ canvas.addEventListener('pointerdown', e => {
 document.addEventListener('pointermove', e => {
   if (!drag) return;
   e.preventDefault();
-  const pos    = clientToCanvas(e.clientX, e.clientY);
+  const pos    = clientToStorage(e.clientX, e.clientY);
   drag.cx      = pos.x;
   drag.cy      = pos.y;
   drag.onTrash = isOverTrash(e.clientX, e.clientY);
@@ -777,9 +796,21 @@ function redraw() {
   const H = canvas.clientHeight || canvas.height;
   if (!W || !H) return;
   ctx.clearRect(0, 0, W, H);
-  if (courtType === 'half') drawHalfCourt();
-  else                       drawFullCourt();
-  drawObjects();
+  if (courtType === 'half') {
+    drawHalfCourt();
+    drawObjects();
+  } else if (isPortraitFull()) {
+    // Apply reflection transform (x,y)↔(y,x) so the court's long axis (94ft)
+    // runs vertically and fills the portrait screen height.
+    ctx.save();
+    ctx.transform(0, 1, 1, 0, 0, 0);
+    drawFullCourt();
+    drawObjects();
+    ctx.restore();
+  } else {
+    drawFullCourt();
+    drawObjects();
+  }
 }
 
 // ── Court toggle ────────────────────────────────────────────────
